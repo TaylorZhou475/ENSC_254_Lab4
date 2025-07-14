@@ -41,8 +41,28 @@ void print_result(result r) {
  *             address in the return "result" struct. Update miss_count and eviction_count.
  */
 result operateCache(const unsigned long long address, Cache *cache) {
-  /* YOUR CODE HERE */
   result r;
+  Set* set = &(cache->sets[cache_set(address, cache)]);
+  set->lru_clock++;
+
+  if(probe_cache(address, cache) == true){
+    hit_cacheline(address, cache);
+    cache->hit_count++; 
+    r.status = 1;
+  }
+  else{
+    bool insertion = insert_cacheline(address, cache);
+    if(insertion == true){
+      r.status = 0;
+      r.insert_block_addr = address_to_block(address, cache);
+      cache->miss_count++;
+    }
+    else{ 
+      unsigned long long victim = victim_cacheline(address, cache);
+      //Call the replace cacheline here
+    }
+  }
+  
   return r;
 }
 
@@ -51,8 +71,9 @@ result operateCache(const unsigned long long address, Cache *cache) {
 // i.e., byte offset bits are cleared to 0
 unsigned long long address_to_block(const unsigned long long address,
                                 const Cache *cache) {
-  /* YOUR CODE HERE */
-  return 0;
+  unsigned long long block = ((address >> cache->blockBits) << cache->blockBits);
+  //Mask out the last 2^b bits for the block aligned address
+  return block;
 }
 
 // Address looks like: |   TAG   |   INDEX   |  BLOCK OFFSET  |
@@ -74,6 +95,7 @@ unsigned long long cache_set(const unsigned long long address,
 // currentLine->lru_clock = ++currentSet->lru_clock // Set the accessed line's LRU clock as the new highest value to indicate that it has been accessed
 
 // Check if the address is found in the cache. If so, return true. else return false.
+//I think youre just meant to return true, not also do the lfu and lru stuff here, thats in hit_cacheline
 bool probe_cache(const unsigned long long address, const Cache *cache) {
   unsigned long long currentTag = cache_tag(address, cache);
   unsigned long long currentSetIndex = cache_set(address, cache);
@@ -98,7 +120,20 @@ bool probe_cache(const unsigned long long address, const Cache *cache) {
 // Access address in cache. Called only if probe is successful.
 // Update the LRU (least recently used) or LFU (least frequently used) counters.
 void hit_cacheline(const unsigned long long address, Cache *cache){
-  /* YOUR CODE HERE */
+  Set* set = &(cache->sets[cache_set(address, cache)]);
+  unsigned long long tag = cache_tag(address, cache);
+  for (int i = 0; i < cache->linesPerSet; i++) {
+    Line* line = &(set->lines[i]); //Iterate through the set
+    if (line->valid == true && line->tag == tag) { //Check for the right line
+      if (cache->lfu == 1) { // LFU mode
+        line->access_counter++;
+      }
+      // LRU mode
+      line->lru_clock = set->lru_clock; //lru clock increments regardless, as LFU still uses LRU as tiebreaker
+      
+      return;
+    }
+  }
  }
 
 /* This function is only called if probe_cache returns false, i.e., the address is
@@ -112,8 +147,22 @@ void hit_cacheline(const unsigned long long address, Cache *cache){
  * Otherwise, it returns false.  
  */ 
 bool insert_cacheline(const unsigned long long address, Cache *cache) {
-  /* YOUR CODE HERE */
-   return false;
+  Set* set = &(cache->sets[cache_set(address, cache)]);
+  unsigned long long tag = cache_tag(address, cache);
+
+  for(int i = 0; i< cache->linesPerSet; i++){ //Iterating through the set
+    Line* line = &(set->lines[i]);
+
+    if(line->valid == false){ //If it finds an empty line, set validity to true, change the tag to the inserted tag
+                              //The lru clock is updated to set clock, and the access counter is initialized to 1, return true
+      line->valid = true;
+      line->tag = tag;
+      line->lru_clock = set->lru_clock;
+      line->access_counter = 1;
+      return true;
+    }
+  }
+   return false; //If no empty line is found, return flase
 }
 
 // If there is no empty cacheline, this method figures out which cacheline to replace
@@ -121,8 +170,46 @@ bool insert_cacheline(const unsigned long long address, Cache *cache) {
 // of the victim cacheline; note we no longer have access to the full address of the victim
 unsigned long long victim_cacheline(const unsigned long long address,
                                 const Cache *cache) {
-  /* YOUR CODE HERE */
-   return 0;
+
+  unsigned long long setIndex = cache_set(address, cache);
+  Set* set = &(cache->sets[setIndex]);
+  Line* least_recent_line = &(set->lines[0]); //Initialize least recent line as the first one
+  Line* least_frequent_line = &(set->lines[0]); //Initialize least frequent lineas the first line
+
+  for(int i = 1; i < cache->linesPerSet; i++){
+    Line* line = &(set->lines[i]);
+
+    if(cache->lfu == 0){ // Least recently used case
+      if(line->lru_clock < least_recent_line->lru_clock){
+        least_recent_line = line; //If the line we are iterating through has a lower LRU clock(less recent)
+                                 //Then our least recent line is set as the iterating line
+      }
+    }
+    else{//Least frequently used case, LFU = 1
+      if(line->access_counter < least_frequent_line->access_counter){//If iterating line has a lower access counter than current least frequent line
+        least_frequent_line = line;
+      }
+      else if((line->access_counter == least_frequent_line->access_counter) && line->lru_clock < least_frequent_line->lru_clock){
+        //If iterating line has equal access counter, and has lower lru clock (less recent)
+        least_frequent_line = line;
+      }
+    }
+  }
+
+  if(cache->lfu == 0){//After iteration, return the LRU or LFU line address, using helper function
+    return line_to_block_address(least_recent_line, setIndex, cache);
+  }
+
+  else{
+    return line_to_block_address(least_frequent_line, setIndex, cache);
+  }
+}
+
+//Helper function to reconstruct the block address from a line
+unsigned long long line_to_block_address(const Line *line, unsigned long long setIndex, const Cache *cache){
+  unsigned long long address = line->tag << (cache->setBits + cache->blockBits); //Move the tag into the right place
+  address = address | (setIndex << cache->blockBits); //Add in the set index
+  return address;
 }
 
 /* Replace the victim cacheline with the new address to insert. Note for the victim cachline,
