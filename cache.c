@@ -55,23 +55,43 @@ unsigned long long address_to_block(const unsigned long long address,
   return 0;
 }
 
+// Address looks like: |   TAG   |   INDEX   |  BLOCK OFFSET  |
+
 // Return the cache tag of an address
 unsigned long long cache_tag(const unsigned long long address,
                              const Cache *cache) {
-  /* YOUR CODE HERE */
-  return 0;
+  return (address >> (cache->blockBits + cache->setBits));
 }
 
 // Return the cache set index of the address
 unsigned long long cache_set(const unsigned long long address,
                              const Cache *cache) {
-  /* YOUR CODE HERE */
-  return 0;
+  unsigned long long shifted = address >> cache->blockBits;
+  return shifted & ((1ULL << cache->setBits) - 1);    // (1ULL << "value") - 1 = 100000000 - 1 = 0111111111  (useful bitmask)
 }
+
+// ++set->lru_clock // Increment the global clock of the set (happens on every cache access (hit or insert))
+// currentLine->lru_clock = ++currentSet->lru_clock // Set the accessed line's LRU clock as the new highest value to indicate that it has been accessed
 
 // Check if the address is found in the cache. If so, return true. else return false.
 bool probe_cache(const unsigned long long address, const Cache *cache) {
-  /* YOUR CODE HERE */
+  unsigned long long currentTag = cache_tag(address, cache);
+  unsigned long long currentSetIndex = cache_set(address, cache);
+  Set* currentSet = &(cache->sets[currentSetIndex]);
+  for (int i = 0; i < cache->linesPerSet; i++) {
+    Line* currentLine = &(currentSet->lines[i]);
+    
+    if (currentLine->valid == true && currentLine->tag == currentTag) {
+      if (cache->lfu == 1) { // LFU mode
+        currentLine->access_counter ++;
+      }
+      else { // LRU mode
+        currentLine->lru_clock = ++(currentSet->lru_clock);
+      }
+      
+      return true; // Indicate a cache HIT
+    }
+  }
   return false;
 }
 
