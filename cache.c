@@ -164,6 +164,13 @@ bool insert_cacheline(const unsigned long long address, Cache *cache) {
    return false; //If no empty line is found, return flase
 }
 
+//Helper function to reconstruct the block address from a line
+unsigned long long line_to_block_address(const Line *line, unsigned long long setIndex, const Cache *cache){
+  unsigned long long address = line->tag << (cache->setBits + cache->blockBits); //Move the tag into the right place
+  address = address | (setIndex << cache->blockBits); //Add in the set index
+  return address;
+}
+
 // If there is no empty cacheline, this method figures out which cacheline to replace
 // depending on the cache replacement policy (LRU and LFU). It returns the block address
 // of the victim cacheline; note we no longer have access to the full address of the victim
@@ -202,13 +209,6 @@ unsigned long long victim_cacheline(const unsigned long long address,
   else{
     return line_to_block_address(least_frequent_line, setIndex, cache);
   }
-}
-
-//Helper function to reconstruct the block address from a line
-unsigned long long line_to_block_address(const Line *line, unsigned long long setIndex, const Cache *cache){
-  unsigned long long address = line->tag << (cache->setBits + cache->blockBits); //Move the tag into the right place
-  address = address | (setIndex << cache->blockBits); //Add in the set index
-  return address;
 }
 
 /* Replace the victim cacheline with the new address to insert. Note for the victim cachline,
@@ -276,28 +276,3 @@ void printSummary(const Cache *cache) {
   printf("%s hits: %d, misses: %d, evictions: %d\n", cache->name, cache->hit_count,
          cache->miss_count, cache->eviction_count);
 }
-
-typedef struct _cache {
-  // Cache parameters, which users configure from the command line
-  //-s <num>: Number of set index bits. i.e., number of cache sets = 2^s
-  int setBits;
-  //-E <num>: Number of lines per set. i.e., associativity, number of ways
-  int linesPerSet;
-  //-b <num>: Number of block offset bits. i.e., number of bytes per block = 2^b
-  int blockBits;
-
-  // Core cache data structure
-  Set *sets; // List/Array of cache sets in the cache
-
-  // Cache stats to count the total number of hits, misses, and evictions
-  int hit_count;
-  int miss_count;
-  int eviction_count;
-  
-  // Cache replacement policy
-  // 0: Least Recently Used (LRU), 1: Least Frequently Used (LFU)
-  int lfu;
-
-  bool displayTrace; // Used for verbose prints
-  char* name; // name for the cache
-} Cache;
