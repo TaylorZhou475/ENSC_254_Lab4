@@ -43,7 +43,7 @@ void print_result(result r) {
 result operateCache(const unsigned long long address, Cache *cache) {
   result r;
   Set* set = &(cache->sets[cache_set(address, cache)]);
-  set->lru_clock++;
+  ++(set->lru_clock);
 
   if(probe_cache(address, cache) == true){
     hit_cacheline(address, cache);
@@ -59,7 +59,12 @@ result operateCache(const unsigned long long address, Cache *cache) {
     }
     else{ 
       unsigned long long victim = victim_cacheline(address, cache);
-      //Call the replace cacheline here
+      replace_cacheline(victim, address, cache);
+      r.victim_block_addr = victim; // Already a block address, no need to call address_to_block() function
+      r.insert_block_addr = address_to_block(address, cache);
+      r.status = 2;
+      cache->miss_count++;
+      cache->eviction_count++;
     }
   }
   
@@ -95,7 +100,7 @@ unsigned long long cache_set(const unsigned long long address,
 // currentLine->lru_clock = ++currentSet->lru_clock // Set the accessed line's LRU clock as the new highest value to indicate that it has been accessed
 
 // Check if the address is found in the cache. If so, return true. else return false.
-//I think youre just meant to return true, not also do the lfu and lru stuff here, thats in hit_cacheline
+
 bool probe_cache(const unsigned long long address, const Cache *cache) {
   unsigned long long currentTag = cache_tag(address, cache);
   unsigned long long currentSetIndex = cache_set(address, cache);
@@ -104,13 +109,6 @@ bool probe_cache(const unsigned long long address, const Cache *cache) {
     Line* currentLine = &(currentSet->lines[i]);
     
     if (currentLine->valid == true && currentLine->tag == currentTag) {
-      if (cache->lfu == 1) { // LFU mode
-        currentLine->access_counter ++;
-      }
-      else { // LRU mode
-        currentLine->lru_clock = ++(currentSet->lru_clock);
-      }
-      
       return true; // Indicate a cache HIT
     }
   }
@@ -157,12 +155,20 @@ bool insert_cacheline(const unsigned long long address, Cache *cache) {
                               //The lru clock is updated to set clock, and the access counter is initialized to 1, return true
       line->valid = true;
       line->tag = tag;
+      line->block_addr = (address >> cache->blockBits) << cache->blockBits;
       line->lru_clock = set->lru_clock;
       line->access_counter = 1;
       return true;
     }
   }
    return false; //If no empty line is found, return flase
+}
+
+//Helper function to reconstruct the block address from a line
+unsigned long long line_to_block_address(const Line *line, unsigned long long setIndex, const Cache *cache){
+  unsigned long long address = line->tag << (cache->setBits + cache->blockBits); //Move the tag into the right place
+  address = address | (setIndex << cache->blockBits); //Add in the set index
+  return address;
 }
 
 // If there is no empty cacheline, this method figures out which cacheline to replace
@@ -174,7 +180,7 @@ unsigned long long victim_cacheline(const unsigned long long address,
   unsigned long long setIndex = cache_set(address, cache);
   Set* set = &(cache->sets[setIndex]);
   Line* least_recent_line = &(set->lines[0]); //Initialize least recent line as the first one
-  Line* least_frequent_line = &(set->lines[0]); //Initialize least frequent lineas the first line
+  Line* least_frequent_line = &(set->lines[0]); //Initialize least frequent line as the first line
 
   for(int i = 1; i < cache->linesPerSet; i++){
     Line* line = &(set->lines[i]);
@@ -205,33 +211,64 @@ unsigned long long victim_cacheline(const unsigned long long address,
   }
 }
 
-//Helper function to reconstruct the block address from a line
-unsigned long long line_to_block_address(const Line *line, unsigned long long setIndex, const Cache *cache){
-  unsigned long long address = line->tag << (cache->setBits + cache->blockBits); //Move the tag into the right place
-  address = address | (setIndex << cache->blockBits); //Add in the set index
-  return address;
-}
-
 /* Replace the victim cacheline with the new address to insert. Note for the victim cachline,
  * we only have its block address. For the new address to be inserted, we have its full address.
  * Remember to update the new cache line's lru_clock based on the global lru_clock in the cache
  * set and initiate the cache line's access_counter.
  */
-void replace_cacheline(const unsigned long long victim_block_addr,
-		       const unsigned long long insert_addr, Cache *cache) {
-  /* YOUR CODE HERE */
+void replace_cacheline(const unsigned long long victim_block_addr, const unsigned long long insert_addr, Cache *cache) {
+  unsigned long long currentSetIndex = cache_set(insert_addr, cache);
+  unsigned long long newTag = cache_tag(insert_addr, cache);
+  Set* currentSet = &(cache->sets[currentSetIndex]);
+  for (int i = 0; i < cache->linesPerSet; i++) {
+    Line* currentLine = &(currentSet->lines[i]);
+    
+    if (currentLine->valid == true && currentLine->block_addr == victim_block_addr) { // Have found the victimLine
+      currentLine->tag = newTag;
+      currentLine->block_addr = (insert_addr >> cache->blockBits) << cache->blockBits;
+      currentLine->lru_clock = currentSet->lru_clock;
+      currentLine->access_counter = 1;
+      return;
+    }
+  }
 }
 
 // allocate the memory space for the cache with the given cache parameters
 // and initialize the cache sets and lines.
 // Initialize the cache name to the given name 
-void cacheSetUp(Cache *cache, char *name) {
-  /* YOUR CODE HERE */
+void cacheSetUp(Cache* cache, char* name) {
+  int numSets = 1U << cache->setBits;  // Determine number of sets
+  cache->sets = malloc(numSets * sizeof(Set));  // Allocate memory for the "sets" array (that contains a "numSets" quantity of sets)
+
+  for (int i = 0; i < numSets; i++) {
+    Set* currentSet = &(cache->sets[i]);
+    currentSet->lines = malloc(cache->linesPerSet * sizeof(Line));  // Allocate memory for the "lines" array (that contains a "linesPerSet" quantity of lines)
+    currentSet->lru_clock = 0; // Initialize the lru_clock to zero
+
+    for (int j = 0; j < cache->linesPerSet; j++) {  // Initilize each line in the currentSet with default parameters
+      Line* currentLine = &(currentSet->lines[j]);
+      currentLine->block_addr = 0;
+      currentLine->valid = 0;
+      currentLine->tag = 0;
+      currentLine->lru_clock = 0;
+      currentLine->access_counter = 0;
+    }
+
+  }
+  cache->name = name;
 }
 
 // deallocate the memory space for the cache
 void deallocate(Cache *cache) {
-  /* YOUR CODE HERE */
+  int numSets = 1U << cache->setBits;  // Determine number of sets
+
+  for (int i = 0; i < numSets; i++) {
+    Set* currentSet = &(cache->sets[i]);
+    free(currentSet->lines);  // Deallocate lines array
+    currentSet->lines = NULL;  // Set to NULL to avoid dangling pointers
+  }
+  free(cache->sets);  // Deallocate sets array
+  cache->sets = NULL;  // Set to NULL to avoid dangling pointers
 }
 
 // print out summary stats for the cache
